@@ -1,0 +1,64 @@
+# End-to-end check of windows/Applica-stampa.ps1 on a clean Windows runner: install the official
+# PdfCraft MSI as the ArtCraft Launcher does, run the patch with Windows PowerShell 5.1, then check
+# the build with the print fix replaced it. No printer here: the fix itself is checked by
+# build.yml (it compiles in) and on real hardware.
+name: Test the patch
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'A tag this repository has built, e.g. v0.11.0'
+        required: true
+
+permissions: {}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The script is UTF-8 with a BOM
+        shell: pwsh
+        run: |
+          $b = [IO.File]::ReadAllBytes('windows\Applica-stampa.ps1')
+          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { throw 'Applica-stampa.ps1 has no UTF-8 BOM: Windows PowerShell 5.1 would garble the accents' }
+      - name: Install the official PdfCraft
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "unexpected tag $env:TAG" }
+          $v = $env:TAG.Substring(1)
+          gh release download $env:TAG -R storytold/pdfcraft -p "pdfcraft-$v-windows-x64.msi" -p SHA256SUMS.txt -D official
+          if ($LASTEXITCODE -ne 0) { throw 'download failed' }
+          $msi = Resolve-Path "official/pdfcraft-$v-windows-x64.msi"
+          $want = (Select-String -Path official/SHA256SUMS.txt -Pattern "^([0-9a-f]{64})  pdfcraft-$v-windows-x64\.msi$").Matches[0].Groups[1].Value
+          if ((Get-FileHash $msi).Hash.ToLower() -ne $want) { throw 'official MSI hash mismatch' }
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "official install failed: $($p.ExitCode)" }
+          if (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern 'through GDI' -SimpleMatch -Quiet) { throw 'the official build already has the GDI fallback' }
+      - name: Run the patch (Windows PowerShell 5.1)
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\Applica-stampa.ps1
+      - name: Check the result
+        shell: pwsh
+        run: |
+          $v = $env:TAG.Substring(1)
+          $entries = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object DisplayName -eq 'PdfCraft')
+          if ($entries.Count -ne 1) { throw "expected one PdfCraft entry, found $($entries.Count)" }
+          if ($entries[0].DisplayVersion -ne $v -or $entries[0].Publisher -ne 'Learning Machines LLC') { throw "entry: $($entries[0].DisplayVersion) / $($entries[0].Publisher)" }
+          if (-not (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern 'through GDI' -SimpleMatch -Quiet)) { throw 'pdfcraft.exe is not the build with the print fix' }
+          & 'C:\Program Files\PdfCraft\pdfcraft-cli.exe' --version
+          if ($LASTEXITCODE -ne 0) { throw 'pdfcraft-cli does not start' }
+          Write-Output 'OK: build with the print fix installed over the official one'
+      - name: Run the patch again
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\Applica-stampa.ps1

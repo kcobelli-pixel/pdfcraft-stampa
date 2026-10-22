@@ -1,0 +1,205 @@
+# Rebuilds each new PdfCraft release (storytold/pdfcraft) for Windows x64 with the Brother print
+# fix (apply_print_fix.sh) and publishes the MSI and portable zip as a release of this repository,
+# tagged like upstream. windows/Applica-stampa.ps1 installs the build matching the installed
+# PdfCraft version. The release counts as published once SHA256SUMS.txt (uploaded last) lists the
+# MSI; until then the hourly run retries.
+name: Build PdfCraft with the print fix
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'PdfCraft tag, e.g. v0.11.0 (empty: the latest release)'
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      build: ${{ steps.pick.outputs.build }}
+      exists: ${{ steps.pick.outputs.exists }}
+    steps:
+      - name: Pick the tag
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$(gh release view -R storytold/pdfcraft --json tagName --jq .tagName)}"
+          # The tag comes from upstream: only plain release tags reach a shell or a file name.
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::unexpected tag '$tag'"; exit 1; fi
+          v="${tag#v}"
+          build=true
+          if assets="$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/tmp/err)"; then
+            exists=true
+            sums="$(gh release download "$tag" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -O - 2>/dev/null)" || sums=''
+            if grep -qx 'STAMPA-UFFICIALE.txt' <<<"$assets" ||
+              awk -v n="pdfcraft-$v-windows-x64.msi" 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && $2 == n { f = 1 } END { exit !f }' <<<"$sums"; then
+              build=false
+            fi
+          elif grep -q 'release not found' /tmp/err; then
+            exists=false
+          else
+            echo "::error::checking for $tag failed: $(cat /tmp/err)"; exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "build=$build"
+            echo "exists=$exists"
+          } >> "$GITHUB_OUTPUT"
+          echo "PdfCraft $tag: build=$build exists=$exists"
+
+  windows-x64:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      official: ${{ steps.fix.outputs.official }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: patch
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/pdfcraft
+          ref: ${{ needs.plan.outputs.tag }}
+          path: pdfcraft
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: Apply the print fix
+        id: fix
+        shell: bash
+        run: |
+          set +e
+          bash patch/apply_print_fix.sh pdfcraft
+          code=$?
+          if [ "$code" -eq 3 ]; then echo "official=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "official=false" >> "$GITHUB_OUTPUT"
+          exit "$code"
+      - name: Read the craft-fonts pin
+        id: fonts
+        if: steps.fix.outputs.official == 'false'
+        shell: bash
+        run: |
+          # Only the 40 hex digits: a CRLF checkout, quotes or a comment can't leak into the ref.
+          ref="$(sed -n 's/^ *craft-fonts-ref: *["'\'']\{0,1\}\([0-9a-f]\{40\}\).*/\1/p' pdfcraft/.github/workflows/release.yml | head -n1)"
+          if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::unexpected craft-fonts-ref '$ref'"; exit 1; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.fix.outputs.official == 'false'
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ steps.fonts.outputs.ref }}
+          path: craft-fonts
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.fix.outputs.official == 'false'
+        with:
+          workspaces: pdfcraft
+      - name: Install WiX
+        if: steps.fix.outputs.official == 'false'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+      - name: Package (unsigned)
+        if: steps.fix.outputs.official == 'false'
+        shell: pwsh
+        # package.ps1 runs cargo in the current directory.
+        working-directory: pdfcraft
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: '1'
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Check the build has the fix
+        if: steps.fix.outputs.official == 'false'
+        shell: bash
+        run: |
+          # The receipt text only the GDI retry prints.
+          exe=pdfcraft/target/x86_64-pc-windows-msvc/release/pdfcraft.exe
+          LC_ALL=C grep -a -q 'through GDI' "$exe" || { echo "::error::no GDI fallback in $exe"; exit 1; }
+          ls -l pdfcraft/dist/release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.fix.outputs.official == 'false'
+        with:
+          name: release-windows-x64
+          path: pdfcraft/dist/release/*
+          if-no-files-found: error
+
+  release:
+    needs: [plan, windows-x64]
+    if: needs.plan.outputs.build == 'true' && needs.windows-x64.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      EXISTS: ${{ needs.plan.outputs.exists }}
+      OFFICIAL: ${{ needs.windows-x64.outputs.official }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: env.OFFICIAL == 'false'
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Publish the release
+        run: |
+          mkdir -p artifacts sums
+          notes="PdfCraft $TAG ricompilato da storytold/pdfcraft $TAG con la correzione per le stampanti Brother: quando il driver rifiuta la stampa XPS (errore 0x80040003, \"Interfaccia non supportata\"), il documento viene stampato tramite GDI. Build non ufficiale e non firmata. Si installa con Applica-stampa.cmd della release strumenti."
+          if [ "$OFFICIAL" = "true" ]; then
+            echo "PdfCraft $TAG contiene già la correzione ufficiale per la stampa: la patch non serve più." > artifacts/STAMPA-UFFICIALE.txt
+            notes="PdfCraft $TAG contiene già la correzione ufficiale per la stampa: non serve nessuna patch."
+          fi
+          cd artifacts
+          if [ "$OFFICIAL" != "true" ]; then
+            [ -f "pdfcraft-${TAG#v}-windows-x64.msi" ] || { echo "::error::missing the MSI"; exit 1; }
+            sha256sum -- * | sort -k2 > ../sums/SHA256SUMS.txt
+            cat ../sums/SHA256SUMS.txt
+          fi
+          if [ "$EXISTS" = "true" ]; then
+            # Packages first and the checksums last: a download in between fails its hash check.
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- *
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$notes"
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "PdfCraft $TAG con la correzione della stampa" --notes "$notes" --latest=false -- *
+          fi
+          if [ -f ../sums/SHA256SUMS.txt ]; then
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- ../sums/SHA256SUMS.txt
+          fi
+      # shortcut: GitHub turns off scheduled workflows after 60 days without repository activity;
+      # one commit per upstream release keeps it on while PdfCraft keeps releasing.
+      - name: Record the version
+        if: env.EXISTS == 'false'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          echo "$TAG" >> versions.txt
+          git add versions.txt
+          git commit -m "chore: built $TAG"
+          # main may have moved during the build.
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
