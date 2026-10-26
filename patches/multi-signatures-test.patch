@@ -1,0 +1,63 @@
+diff --git a/crates/ui-egui/tests/it/fill_sign.rs b/crates/ui-egui/tests/it/fill_sign.rs
+index 566a14f..5ff80d3 100644
+--- a/crates/ui-egui/tests/it/fill_sign.rs
++++ b/crates/ui-egui/tests/it/fill_sign.rs
+@@ -513,6 +513,58 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
+     assert_eq!(format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations), original);
+ }
+ 
++#[test]
++fn several_saved_signatures_are_added_picked_removed_and_kept_across_restarts() {
++    let typed = |t: &str| SavedSig::Typed(t.into());
++    let mut h = harness();
++    h.state_mut().signature = Some(typed("Ada Lovelace"));
++    h.state_mut().set_option("tool", "fill_sign").unwrap();
++    h.run_steps(3);
++    // Add another while one is saved: Cancel keeps things as they were, Apply keeps both.
++    h.get_by_label("Add signature").click();
++    h.run_steps(3);
++    assert_eq!(h.state().dialog, Some(Dialog::Signature));
++    h.get_by_label("Cancel").click();
++    h.run_steps(3);
++    assert_eq!((h.state().signature.clone(), h.state().more_signatures[0].clone()), (Some(typed("Ada Lovelace")), vec![]));
++    assert_ne!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature), "Cancel never leaves the old one ready to place");
++    h.get_by_label("Add signature").click();
++    h.run_steps(3);
++    h.state_mut().signature_draft.text = "Grace Hopper".into();
++    h.get_by_label("Apply").click();
++    h.run_steps(3);
++    assert_eq!(h.state().signature, Some(typed("Grace Hopper")), "the new one is in use");
++    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature), "Apply arms the Signature tool");
++    assert_eq!(h.state().more_signatures[0], [typed("Ada Lovelace")]);
++    // Both survive a restart. The further ones have a key of their own, which official builds keep
++    // but don't read: their "pdfcraft" settings hold only the one in use, as before.
++    let saved = h.state().persist();
++    assert!(!saved.contains("Ada Lovelace"), "the further ones stay out of the official settings");
++    let mut again = PdfCraftApp::new();
++    again.restore(&saved);
++    again.restore_more_signatures(&h.state().persist_more_signatures());
++    assert_eq!((again.signature.clone(), again.more_signatures.clone()), (Some(typed("Grace Hopper")), [vec![typed("Ada Lovelace")], vec![]]));
++    again.restore_more_signatures(r#"{"signatures":[{"Typed":"Bob"},{"Image":"%%%"},{"Drawn":[[[1e39,0.0],[0.5,0.2]]]}]}"#);
++    assert_eq!(again.more_signatures[0], [typed("Bob")], "unreadable entries drop only themselves");
++    // An official build removed the one in use: the first further one takes its place.
++    let mut removed = PdfCraftApp::new();
++    removed.restore_more_signatures(r#"{"signatures":[{"Typed":"Bob"},{"Typed":"Eve"}],"initials":[{"Typed":"BE"}]}"#);
++    assert_eq!((removed.signature.clone(), removed.more_signatures[0].clone()), (Some(typed("Bob")), vec![typed("Eve")]));
++    assert_eq!((removed.initials.clone(), removed.more_signatures[1].clone()), (Some(typed("BE")), vec![]));
++    // Picking the second card swaps it in; removing the one in use brings the next one back.
++    h.get_by_label("Use signature 2").click();
++    h.run_steps(3);
++    assert_eq!(h.state().signature, Some(typed("Ada Lovelace")));
++    assert_eq!(h.state().more_signatures[0], [typed("Grace Hopper")]);
++    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
++    h.get_by_label("Remove saved signature 2").click();
++    h.run_steps(3);
++    assert_eq!((h.state().signature.clone(), h.state().more_signatures[0].clone()), (Some(typed("Ada Lovelace")), vec![]));
++    h.state_mut().more_signatures[0].push(typed("Grace Hopper"));
++    assert!(h.state_mut().execute("sign.fill.signature.remove"));
++    assert_eq!((h.state().signature.clone(), h.state().more_signatures[0].clone()), (Some(typed("Grace Hopper")), vec![]));
++}
++
+ #[test]
+ fn long_typed_names_fit_the_placed_signature_and_keep_every_outline() {
+     let text = "Alexandria Catherine Elizabeth Montgomery-Wellington";

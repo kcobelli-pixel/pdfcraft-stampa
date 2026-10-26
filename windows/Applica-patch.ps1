@@ -1,15 +1,16 @@
 ﻿<#
-  PdfCraft con la correzione della stampa, per Windows.
+  PdfCraft con le patch, per Windows: la correzione della stampa per le stampanti Brother e più
+  firme salvate in Compila e firma.
 
-  Dopo ogni aggiornamento di PdfCraft fatto con l'ArtCraft Launcher, esegui Applica-stampa.cmd.
+  Dopo ogni aggiornamento di PdfCraft fatto con l'ArtCraft Launcher, esegui Applica-patch.cmd.
   Lo script:
     1. legge la versione di PdfCraft installata;
-    2. scarica da github.com/kcobelli-pixel/pdfcraft-stampa la build della stessa versione con la
-       correzione per le stampanti Brother e ne controlla l'impronta SHA-256;
+    2. scarica da github.com/kcobelli-pixel/pdfcraft-stampa la build della stessa versione con le
+       patch e ne controlla l'impronta SHA-256;
     3. la installa al posto di quella ufficiale (Windows chiede il permesso di amministratore).
   Quando il driver rifiuta la stampa XPS (errore 0x80040003, "Interfaccia non supportata"), questa
-  build stampa il documento tramite GDI. Per tornare alla versione ufficiale basta "Reinstalla"
-  nel Launcher, o il prossimo aggiornamento.
+  build stampa il documento tramite GDI. Le firme salvate restano nelle preferenze di PdfCraft. Per
+  tornare alla versione ufficiale basta "Reinstalla" nel Launcher, o il prossimo aggiornamento.
 
   Funziona con Windows PowerShell 5.1 (quello di Windows 10/11) e con PowerShell 7.
   Il file è salvato in UTF-8 con BOM: senza, PowerShell 5.1 mostra male le lettere accentate.
@@ -28,8 +29,8 @@ $ProgressPreference = 'SilentlyContinue'
 
 $Repo = 'kcobelli-pixel/pdfcraft-stampa'
 $Publisher = 'Learning Machines LLC'
-$Headers = @{ 'User-Agent' = 'pdfcraft-stampa'; 'Accept' = 'application/vnd.github+json' }
-$InstallLog = Join-Path ([IO.Path]::GetTempPath()) 'pdfcraft-stampa-installazione.log'
+$Headers = @{ 'User-Agent' = 'pdfcraft-patch'; 'Accept' = 'application/vnd.github+json' }
+$InstallLog = Join-Path ([IO.Path]::GetTempPath()) 'pdfcraft-patch-installazione.log'
 $script:Tmp = $null
 
 function Fail([string] $Text, [int] $Code = 1) {
@@ -39,8 +40,14 @@ function Fail([string] $Text, [int] $Code = 1) {
   exit $Code
 }
 
+# Builds exist only for the newest PdfCraft: an older one is told to update first.
 function Fail-NotReady {
-  Fail "La versione di PdfCraft $version con la correzione della stampa non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
+  $latest = $null
+  try { $latest = [string] (Invoke-RestMethod -Uri 'https://api.github.com/repos/storytold/pdfcraft/releases/latest' -Headers $Headers).tag_name } catch { }
+  if ($latest -match '^v?(\d+\.\d+\.\d+)$' -and $Matches[1] -ne $version) {
+    Fail "C'è una versione più recente di PdfCraft ($($Matches[1])): aggiornalo con l'ArtCraft Launcher, poi riesegui la patch. La patch viene preparata solo per l'ultima versione." 2
+  }
+  Fail "La versione di PdfCraft $version con le patch non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
 }
 
 function Assert-NotRunning {
@@ -92,15 +99,15 @@ function Save-Asset($Release, [string] $Name, [string] $Dir) {
   if (-not $url.StartsWith("https://github.com/$Repo/releases/download/")) { Fail "Indirizzo di download inatteso: $url" }
   $out = Join-Path $Dir $Name
   try {
-    Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -Headers @{ 'User-Agent' = 'pdfcraft-stampa' }
+    Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -Headers @{ 'User-Agent' = 'pdfcraft-patch' }
   } catch {
     Fail "Download di $Name non riuscito: $($_.Exception.Message)"
   }
   $out
 }
 
-Write-Host 'PdfCraft con la correzione della stampa'
-Write-Host '======================================='
+Write-Host 'PdfCraft con le patch'
+Write-Host '====================='
 
 if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64' -or -not [Environment]::Is64BitOperatingSystem) {
   Fail 'Questa patch esiste solo per Windows a 64 bit su processori Intel o AMD (x64).'
@@ -138,18 +145,19 @@ try {
   Fail "Non riesco a contattare GitHub: $($_.Exception.Message)"
 }
 
-# build.yml publishes this marker instead of a build once the official sources fix printing.
-if (@($release.assets) | Where-Object { $_.name -eq 'STAMPA-UFFICIALE.txt' }) {
-  $official = "Buone notizie: PdfCraft $version contiene già la correzione ufficiale per la stampa.`n`nLa patch non serve più: da ora puoi aggiornare PdfCraft con il Launcher e usarlo così com'è. Se la stampa dovesse dare ancora errore, segnalalo."
+# build.yml publishes this marker instead of a Windows build once the official sources have
+# everything the patches add.
+if (@($release.assets) | Where-Object { $_.name -eq 'PATCH-UFFICIALE-windows.txt' }) {
+  $official = "Buone notizie: PdfCraft $version contiene già ufficialmente tutto quello che aggiungeva la patch (correzione della stampa e più firme salvate).`n`nLa patch non serve più: da ora puoi aggiornare PdfCraft con il Launcher e usarlo così com'è. Se qualcosa non dovesse funzionare, segnalalo."
   Write-Host ''
   Write-Host $official -ForegroundColor Green
-  try { $null = (New-Object -ComObject WScript.Shell).Popup($official, 0, 'PdfCraft: correzione della stampa', 64) } catch { }
+  try { $null = (New-Object -ComObject WScript.Shell).Popup($official, 0, 'PdfCraft: patch', 64) } catch { }
   exit 0
 }
 
-$script:Tmp = Join-Path ([IO.Path]::GetTempPath()) ('pdfcraft-stampa-' + [Guid]::NewGuid().ToString('N'))
+$script:Tmp = Join-Path ([IO.Path]::GetTempPath()) ('pdfcraft-patch-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $script:Tmp | Out-Null
-Write-Host 'Scarico la versione con la correzione...'
+Write-Host 'Scarico la versione con le patch...'
 $sums = Save-Asset $release 'SHA256SUMS.txt' $script:Tmp
 
 if ($mode -eq 'msi') {
@@ -160,7 +168,7 @@ if ($mode -eq 'msi') {
   $folder = Get-MsiFolder
   if ($folder) { $msiArgs += "INSTALLFOLDER=`"$folder`"" }
   Assert-NotRunning
-  Write-Host 'Installo la versione con la correzione: se Windows chiede il permesso, rispondi Sì.'
+  Write-Host 'Installo la versione con le patch: se Windows chiede il permesso, rispondi Sì.'
   $msiexec = Join-Path $env:SystemRoot 'System32\msiexec.exe'
   $process = Start-Process -FilePath $msiexec -ArgumentList $msiArgs -Wait -PassThru
   switch ($process.ExitCode) {
@@ -190,8 +198,22 @@ if ($mode -eq 'msi') {
   }
 }
 
+# The build's receipt says which patches it has (one may not have applied to this version).
+$fixes = ''
+$receipt = @($release.assets) | Where-Object { $_.name -eq 'PATCHES-windows.txt' } | Select-Object -First 1
+if ($receipt) {
+  $receiptFile = Join-Path $script:Tmp 'PATCHES-windows.txt'
+  try {
+    Invoke-WebRequest -Uri $receipt.browser_download_url -OutFile $receiptFile -UseBasicParsing -Headers @{ 'User-Agent' = 'pdfcraft-patch' }
+    $fixes = Get-Content -LiteralPath $receiptFile -Raw
+  } catch { }
+}
+$done = @()
+if ($fixes -match 'print') { $done += 'stampa anche sulle Brother' }
+if ($fixes -match 'signatures') { $done += 'tiene più firme salvate' }
+$what = if ($done.Count) { $done -join ' e ' } else { 'ha le patch' }
 Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
-Write-Host "Fatto: PdfCraft $version ora stampa anche sulle stampanti che rifiutano la stampa XPS." -ForegroundColor Green
-Write-Host 'Dopo il prossimo aggiornamento di PdfCraft riesegui Applica-stampa.cmd.'
+Write-Host "Fatto: PdfCraft $version $what." -ForegroundColor Green
+Write-Host 'Dopo il prossimo aggiornamento di PdfCraft riesegui Applica-patch.cmd.'
 exit 0

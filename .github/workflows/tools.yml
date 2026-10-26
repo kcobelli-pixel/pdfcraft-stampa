@@ -1,11 +1,11 @@
 # Keeps the "strumenti" release in step with the files the user double-clicks, byte for byte as
-# committed, whenever they change.
+# committed (zip keeps the .command's executable bit), whenever they change.
 name: Publish the patch
 
 on:
   push:
     branches: [main]
-    paths: ['windows/**']
+    paths: ['windows/**', 'mac/**']
   workflow_dispatch:
 
 permissions: {}
@@ -23,9 +23,14 @@ jobs:
           persist-credentials: false
       - name: Zip and publish
         run: |
-          zip -j -X PdfCraft-Stampa-Windows.zip windows/Applica-stampa.cmd windows/Applica-stampa.ps1
-          notes='Scarica PdfCraft-Stampa-Windows.zip, sbloccalo (tasto destro › Proprietà › Annulla blocco), estrailo e, dopo ogni aggiornamento di PdfCraft, fai doppio clic su Applica-stampa.cmd.'
+          test -x mac/Applica-patch.command
+          zip -j -X PdfCraft-Patch-Windows.zip windows/Applica-patch.cmd windows/Applica-patch.ps1
+          zip -j -X PdfCraft-Patch-Mac.zip mac/Applica-patch.command
+          notes='Windows: scarica PdfCraft-Patch-Windows.zip, sbloccalo (tasto destro › Proprietà › Annulla blocco), estrailo e, dopo ogni aggiornamento di PdfCraft, fai doppio clic su Applica-patch.cmd. Mac: scarica PdfCraft-Patch-Mac.zip, aprilo e, dopo ogni aggiornamento, fai doppio clic su Applica-patch.command (la prima volta macOS chiede conferma in Impostazioni di Sistema › Privacy e sicurezza › Apri comunque).'
           if ! gh release view strumenti -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create strumenti -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false --title 'Patch per Windows' --notes "$notes"
+            gh release create strumenti -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false --title 'Patch per Windows e Mac' --notes "$notes"
           fi
-          gh release upload strumenti PdfCraft-Stampa-Windows.zip -R "$GITHUB_REPOSITORY" --clobber
+          gh release edit strumenti -R "$GITHUB_REPOSITORY" --title 'Patch per Windows e Mac' --notes "$notes"
+          gh release upload strumenti PdfCraft-Patch-Windows.zip PdfCraft-Patch-Mac.zip -R "$GITHUB_REPOSITORY" --clobber
+          # The zip of the earlier Windows-only patch: its script still works, but this one replaces it.
+          gh release delete-asset strumenti PdfCraft-Stampa-Windows.zip -R "$GITHUB_REPOSITORY" -y 2>/dev/null || true

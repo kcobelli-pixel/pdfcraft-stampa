@@ -1,14 +1,14 @@
-# End-to-end check of windows/Applica-stampa.ps1 on a clean Windows runner: install the official
-# PdfCraft MSI as the ArtCraft Launcher does, run the patch with Windows PowerShell 5.1, then check
-# the build with the print fix replaced it. No printer here: the fix itself is checked by
-# build.yml (it compiles in) and on real hardware.
-name: Test the patch
+# End-to-end checks of both patches on clean runners: install the official PdfCraft as the ArtCraft
+# Launcher does (Windows MSI, macOS DMG into /Applications), run the patch (Windows PowerShell 5.1,
+# the .command on macOS), then check the patched build replaced it. No printer here: the print fix
+# itself is checked by build.yml (it compiles in) and on real hardware.
+name: Test the patches
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'A tag this repository has built, e.g. v0.11.0'
+        description: 'A tag this repository has built, e.g. v0.14.0'
         required: true
 
 permissions: {}
@@ -29,8 +29,8 @@ jobs:
       - name: The script is UTF-8 with a BOM
         shell: pwsh
         run: |
-          $b = [IO.File]::ReadAllBytes('windows\Applica-stampa.ps1')
-          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { throw 'Applica-stampa.ps1 has no UTF-8 BOM: Windows PowerShell 5.1 would garble the accents' }
+          $b = [IO.File]::ReadAllBytes('windows\Applica-patch.ps1')
+          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { throw 'Applica-patch.ps1 has no UTF-8 BOM: Windows PowerShell 5.1 would garble the accents' }
       - name: Install the official PdfCraft
         shell: pwsh
         run: |
@@ -43,10 +43,10 @@ jobs:
           if ((Get-FileHash $msi).Hash.ToLower() -ne $want) { throw 'official MSI hash mismatch' }
           $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "official install failed: $($p.ExitCode)" }
-          if (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern 'through GDI' -SimpleMatch -Quiet) { throw 'the official build already has the GDI fallback' }
+          if (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern 'more_signatures' -SimpleMatch -Quiet) { throw 'the official build already keeps several signatures' }
       - name: Run the patch (Windows PowerShell 5.1)
         shell: cmd
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\Applica-stampa.ps1
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\Applica-patch.ps1
       - name: Check the result
         shell: pwsh
         run: |
@@ -55,10 +55,53 @@ jobs:
             Where-Object DisplayName -eq 'PdfCraft')
           if ($entries.Count -ne 1) { throw "expected one PdfCraft entry, found $($entries.Count)" }
           if ($entries[0].DisplayVersion -ne $v -or $entries[0].Publisher -ne 'Learning Machines LLC') { throw "entry: $($entries[0].DisplayVersion) / $($entries[0].Publisher)" }
-          if (-not (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern 'through GDI' -SimpleMatch -Quiet)) { throw 'pdfcraft.exe is not the build with the print fix' }
+          foreach ($mark in 'through GDI', 'more_signatures') {
+            if (-not (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern $mark -SimpleMatch -Quiet)) { throw "pdfcraft.exe lacks '$mark'" }
+          }
           & 'C:\Program Files\PdfCraft\pdfcraft-cli.exe' --version
           if ($LASTEXITCODE -ne 0) { throw 'pdfcraft-cli does not start' }
-          Write-Output 'OK: build with the print fix installed over the official one'
+          Write-Output 'OK: build with both patches installed over the official one'
       - name: Run the patch again
         shell: cmd
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\Applica-stampa.ps1
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\Applica-patch.ps1
+
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The script is executable
+        run: test -x mac/Applica-patch.command
+      - name: Install the official PdfCraft
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected tag $TAG"; exit 1; }
+          v="${TAG#v}"
+          gh release download "$TAG" -R storytold/pdfcraft -p "pdfcraft-$v-macos-universal.dmg" -p SHA256SUMS.txt -D official
+          (cd official && grep "  pdfcraft-$v-macos-universal.dmg\$" SHA256SUMS.txt | shasum -a 256 -c -)
+          mkdir official/mnt
+          hdiutil attach -nobrowse -readonly -mountpoint official/mnt "official/pdfcraft-$v-macos-universal.dmg"
+          ditto official/mnt/PdfCraft.app /Applications/PdfCraft.app
+          hdiutil detach official/mnt
+          codesign -dv /Applications/PdfCraft.app 2>&1 | grep -q 'TeamIdentifier=DJ6XS33FX8'
+          if LC_ALL=C grep -a -q 'more_signatures' /Applications/PdfCraft.app/Contents/MacOS/PdfCraft; then echo 'the official build already keeps several signatures'; exit 1; fi
+      - name: Run the patch
+        run: HOME="$GITHUB_WORKSPACE/home" ./mac/Applica-patch.command
+      - name: Check the result
+        run: |
+          v="${TAG#v}"
+          app=/Applications/PdfCraft.app
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = ai.storyteller.pdfcraft ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :PdfCraftVersion' "$app/Contents/Info.plist")" = "$v" ]
+          LC_ALL=C grep -a -q 'more_signatures' "$app/Contents/MacOS/PdfCraft"
+          codesign --verify "$app"
+          if ls -d /Applications/.PdfCraft-patch.* 2>/dev/null; then echo 'left a temporary folder'; exit 1; fi
+          echo 'OK: build with several saved signatures installed over the official one'
+      - name: Run the patch again
+        run: HOME="$GITHUB_WORKSPACE/home" ./mac/Applica-patch.command
