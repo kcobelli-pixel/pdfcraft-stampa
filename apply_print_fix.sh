@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Put the Brother print fix into a PdfCraft checkout: craft-print prints through GDI when the
-# driver refuses the XPS job (patches/craft-print.patch, storytold/craft-libs#188) with winprint's
-# GdiPdfPrinter (patches/winprint-gdi.patch, storytold/winprint.rs#6). Both are applied to the
-# exact revisions the checkout's Cargo.lock uses, cloned into ../print-fix beside it, and wired
-# in with [patch] tables.
+# Put the Brother print fix into a PdfCraft checkout. The root cause first: winprint builds the
+# PrintTicket from the driver's default one, so the driver's own JobPrintSpeed isn't duplicated
+# (patches/winprint-ticket.patch, upstream ArcticLampyrid/winprint.rs 1516b36ef). As a safety net,
+# craft-print prints through GDI when the driver still refuses the XPS job
+# (patches/craft-print.patch, storytold/craft-libs#188) with winprint's GdiPdfPrinter
+# (patches/winprint-gdi.patch, storytold/winprint.rs#6). All are applied to the exact revisions
+# the checkout's Cargo.lock uses, cloned into ../print-fix beside it, and wired in with [patch]
+# tables.
 #
 # usage: apply_print_fix.sh <pdfcraft checkout>
 # exit: 0 patched, 3 the official sources already fix printing (nothing changed), 1 failure.
@@ -49,6 +52,7 @@ fi
 
 git -C "$work/craft-libs" apply --3way "$here/patches/craft-print.patch"
 git -C "$work/winprint" apply --3way "$here/patches/winprint-gdi.patch"
+git -C "$work/winprint" apply --3way "$here/patches/winprint-ticket.patch"
 
 # The fallback reads the HRESULT inside winprint's errors.
 toml="$work/craft-libs/crates/print/Cargo.toml"
