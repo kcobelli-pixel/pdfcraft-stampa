@@ -165,6 +165,9 @@ if ($mode -eq 'msi') {
   Assert-Hash $msi $sums
   Unblock-File -LiteralPath $msi
   $msiArgs = @('/i', "`"$msi`"", '/passive', '/norestart', '/l*v', "`"$InstallLog`"")
+  # From 0.15.0 the MSI installs for the current user unless told otherwise, and refuses to
+  # update an install for everyone that way: keep the installed copy's scope.
+  if ($msiInstalls[0].PSPath -like '*HKEY_LOCAL_MACHINE*') { $msiArgs += 'ALLUSERS=1' }
   $folder = Get-MsiFolder
   if ($folder) { $msiArgs += "INSTALLFOLDER=`"$folder`"" }
   Assert-NotRunning

@@ -41,7 +41,9 @@ jobs:
           $msi = Resolve-Path "official/pdfcraft-$v-windows-x64.msi"
           $want = (Select-String -Path official/SHA256SUMS.txt -Pattern "^([0-9a-f]{64})  pdfcraft-$v-windows-x64\.msi$").Matches[0].Groups[1].Value
           if ((Get-FileHash $msi).Hash.ToLower() -ne $want) { throw 'official MSI hash mismatch' }
-          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+          # For everyone in Program Files\PdfCraft, as the Launcher installed it: from 0.15.0 a silent
+          # install is per-user by default, and one for everyone defaults to ArtCraft\PdfCraft.
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart ALLUSERS=1 INSTALLFOLDER=`"C:\Program Files\PdfCraft`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "official install failed: $($p.ExitCode)" }
           if (Select-String -Path 'C:\Program Files\PdfCraft\pdfcraft.exe' -Pattern 'more_signatures' -SimpleMatch -Quiet) { throw 'the official build already keeps several signatures' }
       - name: Run the patch (Windows PowerShell 5.1)
