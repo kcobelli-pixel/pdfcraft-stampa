@@ -1,5 +1,5 @@
 diff --git a/apps/pdfcraft-web/src/main.rs b/apps/pdfcraft-web/src/main.rs
-index 73d14f4..5127a03 100644
+index 73d14f4a..5127a036 100644
 --- a/apps/pdfcraft-web/src/main.rs
 +++ b/apps/pdfcraft-web/src/main.rs
 @@ -27,6 +27,9 @@ fn main() {
@@ -13,10 +13,10 @@ index 73d14f4..5127a03 100644
                      if let Some(url) = query_param("file") {
                          let inbox = app.startup_inbox.clone();
 diff --git a/apps/pdfcraft/src/main.rs b/apps/pdfcraft/src/main.rs
-index 96725cd..af869ee 100644
+index f8e4e5b0..7ab5d283 100644
 --- a/apps/pdfcraft/src/main.rs
 +++ b/apps/pdfcraft/src/main.rs
-@@ -406,6 +406,9 @@ fn app_creator<'a>(
+@@ -413,6 +413,9 @@ fn app_creator<'a>(
          if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
              app.restore(&json);
          }
@@ -26,11 +26,72 @@ index 96725cd..af869ee 100644
          app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
          app.integrated_titlebar = integrated;
          app.window_controls = window_controls;
+diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
+index 8925a0dc..52a4c0a7 100644
+--- a/crates/ui-egui/src/app.rs
++++ b/crates/ui-egui/src/app.rs
+@@ -223,6 +223,8 @@ impl PdfCraftApp {
+             export_status: None,
+             signature: None,
+             initials: None,
++            more_signatures: Default::default(),
++            more_signature_previews: Default::default(),
+             signature_draft: Default::default(),
+             signature_preview: None,
+             signature_photo: None,
+@@ -335,6 +337,7 @@ impl eframe::App for PdfCraftApp {
+             self.window_state.keep(storage, minimized);
+         }
+         storage.set_string("pdfcraft", self.persist());
++        storage.set_string(Self::MORE_SIGNATURES_KEY, self.persist_more_signatures());
+     }
+ 
+     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
+diff --git a/crates/ui-egui/src/app/prefs.rs b/crates/ui-egui/src/app/prefs.rs
+index f64ba6d8..aeb27727 100644
+--- a/crates/ui-egui/src/app/prefs.rs
++++ b/crates/ui-egui/src/app/prefs.rs
+@@ -150,6 +150,35 @@ impl PdfCraftApp {
+         v.to_string()
+     }
+ 
++    /// The eframe storage key for the further saved signatures. Official builds rewrite "pdfcraft"
++    /// without them but keep keys they don't know, so the extras survive running one.
++    pub const MORE_SIGNATURES_KEY: &'static str = "pdfcraft_more_signatures";
++
++    /// The further saved signatures and initials, stored under [`Self::MORE_SIGNATURES_KEY`].
++    pub fn persist_more_signatures(&self) -> String {
++        serde_json::json!({ "signatures": self.more_signatures[0], "initials": self.more_signatures[1] }).to_string()
++    }
++
++    /// Reads [`Self::persist_more_signatures`], after [`Self::restore`]. Each entry on its own: a
++    /// damaged image or a non-finite stroke drops only itself. With none in use (an official
++    /// build removed it), the first further one takes its place.
++    pub fn restore_more_signatures(&mut self, json: &str) {
++        let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
++        for (i, key) in ["signatures", "initials"].into_iter().enumerate() {
++            self.more_signatures[i] = v[key]
++                .as_array()
++                .into_iter()
++                .flatten()
++                .filter_map(|s| serde_json::from_value::<fill_sign::SavedSig>(s.clone()).ok())
++                .filter(|s| !matches!(s, fill_sign::SavedSig::Drawn(st) if st.iter().flatten().flatten().any(|x| !x.is_finite())))
++                .collect();
++            let current = if i == 0 { &mut self.signature } else { &mut self.initials };
++            if current.is_none() && !self.more_signatures[i].is_empty() {
++                *current = Some(self.more_signatures[i].remove(0));
++            }
++        }
++    }
++
+     /// Restore state written by `persist`. Unknown or malformed data is ignored.
+     pub fn restore(&mut self, json: &str) {
+         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
 diff --git a/crates/ui-egui/src/commands.rs b/crates/ui-egui/src/commands.rs
-index c0e12d5..091f606 100644
+index acccbcc5..499700c6 100644
 --- a/crates/ui-egui/src/commands.rs
 +++ b/crates/ui-egui/src/commands.rs
-@@ -620,8 +620,9 @@ impl PdfCraftApp {
+@@ -661,8 +661,9 @@ impl PdfCraftApp {
                      &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
                  );
              }
@@ -43,27 +104,41 @@ index c0e12d5..091f606 100644
                  let initials = id == "sign.fill.initials.change";
                  let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
 diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
-index a6f2477..931efd0 100644
+index c21604a4..bbf24157 100644
 --- a/crates/ui-egui/src/dialogs.rs
 +++ b/crates/ui-egui/src/dialogs.rs
-@@ -1049,6 +1049,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
-                 }
-                 if apply {
-                     let d = std::mem::take(&mut app.signature_draft);
-+                    // Create (not Change) while one is saved adds another (fill_sign::signature_entries).
-+                    if !d.editing
-+                        && let Some(old) = if d.initials { app.initials.take() } else { app.signature.take() }
-+                    {
-+                        app.more_signatures[usize::from(d.initials)].insert(0, old);
-+                    }
-                     let tool = if d.initials {
-                         app.initials = d.saved();
-                         crate::fill_sign::FillTool::Initials
-diff --git a/crates/ui-egui/src/fill_sign.rs b/crates/ui-egui/src/fill_sign.rs
-index 862b63e..cf67215 100644
---- a/crates/ui-egui/src/fill_sign.rs
-+++ b/crates/ui-egui/src/fill_sign.rs
-@@ -538,6 +538,8 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
+@@ -1307,6 +1307,12 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
+     }
+     if req.apply {
+         let d = std::mem::take(&mut app.signature_draft);
++        // Create (not Change) while one is saved adds another (fill_sign::signature_entries).
++        if !d.editing
++            && let Some(old) = if d.initials { app.initials.take() } else { app.signature.take() }
++        {
++            app.more_signatures[usize::from(d.initials)].insert(0, old);
++        }
+         let tool = if d.initials {
+             app.initials = d.saved();
+             crate::fill_sign::FillTool::Initials
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 65bc7e4b..8ce87298 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -571,6 +571,9 @@ pub struct PdfCraftApp {
+     /// The saved Fill & Sign signature and initials (drawn or typed).
+     pub signature: Option<fill_sign::SavedSig>,
+     pub initials: Option<fill_sign::SavedSig>,
++    /// Further saved signatures [0] and initials [1]; picking one swaps it with the one above.
++    pub more_signatures: [Vec<fill_sign::SavedSig>; 2],
++    pub(crate) more_signature_previews: [Vec<Option<(fill_sign::SavedSig, egui::TextureHandle)>>; 2],
+     /// The Create signature / initials dialog, and its typed preview.
+     pub signature_draft: fill_sign::SigDraft,
+     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
+diff --git a/crates/ui-egui/src/tools/fill_sign.rs b/crates/ui-egui/src/tools/fill_sign.rs
+index 995b60fc..1e2c580f 100644
+--- a/crates/ui-egui/src/tools/fill_sign.rs
++++ b/crates/ui-egui/src/tools/fill_sign.rs
+@@ -345,6 +345,8 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
  pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp, t: &Tokens) -> Option<&'static str> {
      ui.set_width(ui.available_width().clamp(240.0, 248.0));
      let mut command = None;
@@ -72,7 +147,7 @@ index 862b63e..cf67215 100644
      for (i, (saved, what, use_id, change_id, remove_id)) in [
          (app.signature.as_ref(), "signature", "sign.fill.signature", "sign.fill.signature.change", "sign.fill.signature.remove"),
          (app.initials.as_ref(), "initials", "sign.fill.initials", "sign.fill.initials.change", "sign.fill.initials.remove"),
-@@ -545,37 +547,62 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
+@@ -352,37 +354,62 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
      .into_iter()
      .enumerate()
      {
@@ -88,7 +163,7 @@ index 862b63e..cf67215 100644
 -        ui.horizontal(|ui| {
 -            let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
 -            let use_label = label("Use {what}");
--            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, use_label.clone()));
+-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
 -            let painter = ui.painter_at(rect);
 -            painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
 -            painter.rect_stroke(
@@ -118,7 +193,7 @@ index 862b63e..cf67215 100644
 +            ui.horizontal(|ui| {
 +                let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
 +                let use_label = label("Use {what}");
-+                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, use_label.clone()));
++                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
 +                let painter = ui.painter_at(rect);
 +                painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
 +                painter.rect_stroke(
@@ -161,70 +236,3 @@ index 862b63e..cf67215 100644
      }
      command
  }
-diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 0300afd..13cf2a4 100644
---- a/crates/ui-egui/src/lib.rs
-+++ b/crates/ui-egui/src/lib.rs
-@@ -959,6 +959,9 @@ pub struct PdfCraftApp {
-     /// The saved Fill & Sign signature and initials (drawn or typed).
-     pub signature: Option<fill_sign::SavedSig>,
-     pub initials: Option<fill_sign::SavedSig>,
-+    /// Further saved signatures [0] and initials [1]; picking one swaps it with the one above.
-+    pub more_signatures: [Vec<fill_sign::SavedSig>; 2],
-+    pub(crate) more_signature_previews: [Vec<Option<(fill_sign::SavedSig, egui::TextureHandle)>>; 2],
-     /// The Create signature / initials dialog, and its typed preview.
-     pub signature_draft: fill_sign::SigDraft,
-     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
-@@ -1280,6 +1283,8 @@ impl PdfCraftApp {
-             export_status: None,
-             signature: None,
-             initials: None,
-+            more_signatures: Default::default(),
-+            more_signature_previews: Default::default(),
-             signature_draft: Default::default(),
-             signature_preview: None,
-             signature_photo: None,
-@@ -2688,6 +2693,35 @@ impl PdfCraftApp {
-         v.to_string()
-     }
- 
-+    /// The eframe storage key for the further saved signatures. Official builds rewrite "pdfcraft"
-+    /// without them but keep keys they don't know, so the extras survive running one.
-+    pub const MORE_SIGNATURES_KEY: &'static str = "pdfcraft_more_signatures";
-+
-+    /// The further saved signatures and initials, stored under [`Self::MORE_SIGNATURES_KEY`].
-+    pub fn persist_more_signatures(&self) -> String {
-+        serde_json::json!({ "signatures": self.more_signatures[0], "initials": self.more_signatures[1] }).to_string()
-+    }
-+
-+    /// Reads [`Self::persist_more_signatures`], after [`Self::restore`]. Each entry on its own: a
-+    /// damaged image or a non-finite stroke drops only itself. With none in use (an official
-+    /// build removed it), the first further one takes its place.
-+    pub fn restore_more_signatures(&mut self, json: &str) {
-+        let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
-+        for (i, key) in ["signatures", "initials"].into_iter().enumerate() {
-+            self.more_signatures[i] = v[key]
-+                .as_array()
-+                .into_iter()
-+                .flatten()
-+                .filter_map(|s| serde_json::from_value::<fill_sign::SavedSig>(s.clone()).ok())
-+                .filter(|s| !matches!(s, fill_sign::SavedSig::Drawn(st) if st.iter().flatten().flatten().any(|x| !x.is_finite())))
-+                .collect();
-+            let current = if i == 0 { &mut self.signature } else { &mut self.initials };
-+            if current.is_none() && !self.more_signatures[i].is_empty() {
-+                *current = Some(self.more_signatures[i].remove(0));
-+            }
-+        }
-+    }
-+
-     /// Restore state written by `persist`. Unknown or malformed data is ignored.
-     pub fn restore(&mut self, json: &str) {
-         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
-@@ -3476,6 +3510,7 @@ impl eframe::App for PdfCraftApp {
-             self.window_state.keep(storage, minimized);
-         }
-         storage.set_string("pdfcraft", self.persist());
-+        storage.set_string(Self::MORE_SIGNATURES_KEY, self.persist_more_signatures());
-     }
- 
-     /// Each frame's work before drawing: opens, operating-system and control-channel requests,

@@ -9,8 +9,8 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pdf="$(cd "$1" && pwd)"
-# The release the patch was written against (v0.14.0): its blobs let --3way merge newer releases.
-base=5a78b223871add8e3883856205cc653d741e0e94
+# The release the patch was written against (v0.15.0): its blobs let --3way merge newer releases.
+base=75360d1d7db06fed974f48c914d4c04132757187
 
 # Only this patch's own field: any other upstream design shows up as a loud --3way conflict.
 if grep -qw 'more_signatures' "$pdf/crates/ui-egui/src/lib.rs"; then

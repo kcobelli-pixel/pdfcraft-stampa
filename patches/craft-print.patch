@@ -120,7 +120,7 @@ index 0000000..ffc8b53
 +    }
 +}
 diff --git a/crates/print/src/lib.rs b/crates/print/src/lib.rs
-index 8fbea52..3cde908 100644
+index ecf9750..98616c5 100644
 --- a/crates/print/src/lib.rs
 +++ b/crates/print/src/lib.rs
 @@ -3,11 +3,15 @@
@@ -141,7 +141,7 @@ index 8fbea52..3cde908 100644
  #[cfg(any(test, windows))]
  mod progress;
  #[cfg(any(test, windows))]
-@@ -444,14 +448,15 @@ pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
+@@ -476,7 +480,7 @@ pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
  }
  
  /// Send a print-ready PDF to the spooler. Returns the spooler's message: CUPS includes a job id;
@@ -150,17 +150,18 @@ index 8fbea52..3cde908 100644
  pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
      submit_with_progress(pdf, job, &mut |_, _| {})
  }
- 
- /// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
+@@ -485,7 +489,8 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
  /// sheet and after each sheet is successfully added to the native print job. Counts refer to
--/// source PDF sheets, regardless of copies or duplex. CUPS reports no progress.
-+/// source PDF sheets, regardless of copies or duplex. A Windows job retried through GDI after
-+/// its XPS job was refused starts again from `(0, sheets)`. CUPS reports no progress.
+ /// source PDF sheets, regardless of copies or duplex, except for collated copies on a driver
+ /// that can't collate: every copy's sheets are sent, in one job or a job per copy, and counted
+-/// together. CUPS reports no progress.
++/// together. A Windows job retried through GDI after its XPS job was refused counts its sheets
++/// again from that job's first. CUPS reports no progress.
  ///
  /// The callback runs synchronously on the thread calling this function, need not be `Send`,
  /// and should return promptly. It is never retained. All sheets processed is not terminal
 diff --git a/crates/print/src/windows.rs b/crates/print/src/windows.rs
-index 45a23aa..f64a36f 100644
+index b99d1cf..12bf7fb 100644
 --- a/crates/print/src/windows.rs
 +++ b/crates/print/src/windows.rs
 @@ -7,12 +7,19 @@
@@ -235,68 +236,99 @@ index 45a23aa..f64a36f 100644
  /// The user's default printer; `None` when there is none.
  fn default_printer() -> Option<String> {
      winsafe::GetDefaultPrinter().ok().filter(|n| !n.is_empty())
-@@ -123,7 +172,11 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
+@@ -132,7 +181,11 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
  /// whoever calls. Windows.Data.Pdf reads from a path, so the job goes to a file in a private
  /// temporary folder (an unpredictable name, only this user's) for as long as the spooler takes
  /// it, and the folder is removed however the job ended. Windows answers once the job is in the
 -/// queue: a paused queue or an offline printer keeps the job there, as with any program.
 +/// queue: a paused queue or an offline printer keeps the job there, as with any program. When
 +/// the print system refuses the XPS job early ([`crate::fallback::falls_back_to_gdi`]), the same
-+/// file and ticket go through GDI. `WinPdfPrinter::print_with_progress` has returned by then,
-+/// and its print context, dropped on the way out, has asked the spooler to cancel the
-+/// unfinished XPS job (best effort).
++/// file and ticket go through GDI, and so do the copies after it when each copy is a job of its
++/// own. `WinPdfPrinter::print_with_progress` has returned by then, and its print context,
++/// dropped on the way out, has asked the spooler to cancel the unfinished XPS job (best effort).
  pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
      let read = sheets::read(pdf)?;
      read.check_print_annotations()?;
-@@ -157,25 +210,34 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
+@@ -198,37 +251,60 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
          let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
          file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
          drop(file);
--        WinPdfPrinter::new(device)
--            .print_with_progress(&path, ticket, |processed, total| {
--                // Page acceptance is distinct from terminal job success. The callback
--                // drains on the submitter's thread, so it can retain non-Send UI state.
--                let _ = sender.send((processed as usize, total as usize));
--            })
--            .map_err(|e| {
--                let mut message = e.to_string();
--                let mut cause = std::error::Error::source(&e);
--                while let Some(source) = cause {
--                    message.push_str(&format!(": {source}"));
--                    cause = source.source();
--                }
--                spool_error(message)
--            })
-+        // Page acceptance is distinct from terminal job success. The callback drains on the
-+        // submitter's thread, so it can retain non-Send UI state.
-+        let report = |processed: u32, total: u32| {
-+            let _ = sender.send((processed as usize, total as usize));
-+        };
-+        let mut accepted = 0;
-+        let xps = WinPdfPrinter::new(device.clone()).print_with_progress(&path, ticket.clone(), |processed, total| {
-+            accepted = processed;
-+            report(processed, total);
-+        });
-+        match xps {
-+            Ok(()) => Ok(false),
-+            Err(e) if hresult(&e).is_some_and(|h| crate::fallback::falls_back_to_gdi(h, accepted, package_closed(&e))) => {
-+                // The XPS context was dropped inside print_with_progress, cancelling its job.
-+                GdiPdfPrinter::new(device).print_with_progress(&path, ticket, report).map(|()| true).map_err(|gdi| {
-+                    spool_error(format!(
-+                        "{}; the XPS print path was refused, and printing through GDI failed too: {}",
-+                        with_sources(&e),
-+                        with_sources(&gdi)
-+                    ))
+-        let printer = WinPdfPrinter::new(device);
++        let printer = WinPdfPrinter::new(device.clone());
++        let gdi = GdiPdfPrinter::new(device);
+         let jobs = jobs as usize;
++        // Once the driver has refused the XPS path, the remaining copies go straight through GDI.
++        let mut through_gdi = false;
+         for copy in 0..jobs {
+-            printer
+-                .print_with_progress(&path, ticket.clone(), |processed, total| {
+-                    // Page acceptance is distinct from terminal job success. The callback
+-                    // drains on the submitter's thread, so it can retain non-Send UI state.
+-                    let (processed, total) = (processed as usize, total as usize);
+-                    let _ = sender.send((copy * total + processed, jobs * total));
+-                })
+-                .map_err(|e| {
+-                    let mut message = e.to_string();
+-                    let mut cause = std::error::Error::source(&e);
+-                    while let Some(source) = cause {
+-                        message.push_str(&format!(": {source}"));
+-                        cause = source.source();
+-                    }
+-                    if copy > 0 {
+-                        message = format!("{copy} of {jobs} copies were sent, each as a job of its own, and the next was not: {message}");
++            // Page acceptance is distinct from terminal job success. The callback drains on the
++            // submitter's thread, so it can retain non-Send UI state.
++            let report = |processed: u32, total: u32| {
++                let (processed, total) = (processed as usize, total as usize);
++                let _ = sender.send((copy * total + processed, jobs * total));
++            };
++            let sent = if through_gdi {
++                gdi.print_with_progress(&path, ticket.clone(), report).map_err(|e| with_sources(&e))
++            } else {
++                let mut accepted = 0;
++                let xps = printer.print_with_progress(&path, ticket.clone(), |processed, total| {
++                    accepted = processed;
++                    report(processed, total);
++                });
++                match xps {
++                    Ok(()) => Ok(()),
++                    Err(e) if hresult(&e).is_some_and(|h| crate::fallback::falls_back_to_gdi(h, accepted, package_closed(&e))) => {
++                        // The XPS context was dropped inside print_with_progress, cancelling its job.
++                        through_gdi = true;
++                        gdi.print_with_progress(&path, ticket.clone(), report).map_err(|gdi| {
++                            format!(
++                                "{}; the XPS print path was refused, and printing through GDI failed too: {}",
++                                with_sources(&e),
++                                with_sources(&gdi)
++                            )
++                        })
+                     }
+-                    spool_error(message)
+-                })?;
++                    Err(e) => Err(with_sources(&e)),
++                }
++            };
++            sent.map_err(|message| {
++                spool_error(if copy > 0 {
++                    format!("{copy} of {jobs} copies were sent, each as a job of its own, and the next was not: {message}")
++                } else {
++                    message
 +                })
-+            }
-+            Err(e) => Err(spool_error(with_sources(&e))),
-+        }
++            })?;
+         }
+-        Ok((repeat, jobs))
++        Ok((repeat, jobs, through_gdi))
      });
      drop(dir);
--    result?;
--    Ok(format!("spooled {count} sheet(s)"))
-+    let through_gdi = result?;
-+    Ok(if through_gdi { format!("spooled {count} sheet(s) through GDI") } else { format!("spooled {count} sheet(s)") })
+-    Ok(match result? {
++    let (repeat, jobs, through_gdi) = result?;
++    let message = match (repeat, jobs) {
+         (Some(repeat), _) => format!("spooled {count} sheet(s) {} times, collated", repeat.copies),
+         (None, jobs) if jobs > 1 => format!("spooled {count} sheet(s) as {jobs} jobs, one per collated copy"),
+         _ => format!("spooled {count} sheet(s)"),
+-    })
++    };
++    Ok(if through_gdi { format!("{message} through GDI") } else { message })
  }
  
  #[cfg(test)]
