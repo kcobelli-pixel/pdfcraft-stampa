@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Put the Brother print fix into a PdfCraft checkout. The root cause first: winprint builds the
+# Put the Brother print fix into a PdfCraft checkout (or a GridCraft one: the Windows build of
+# kcobelli-pixel/gridcraft-italiano runs this script too). The root cause first: winprint builds the
 # PrintTicket from the driver's default one, so the driver's own JobPrintSpeed isn't duplicated
 # (patches/winprint-ticket.patch, upstream ArcticLampyrid/winprint.rs 1516b36ef). As a safety net,
 # craft-print prints through GDI when the driver still refuses the XPS job
@@ -8,7 +9,7 @@
 # the checkout's Cargo.lock uses, cloned into ../print-fix beside it, and wired in with [patch]
 # tables.
 #
-# usage: apply_print_fix.sh <pdfcraft checkout>
+# usage: apply_print_fix.sh <pdfcraft or gridcraft checkout>
 # exit: 0 patched, 3 the official sources already fix printing (nothing changed), 1 failure.
 set -euo pipefail
 
