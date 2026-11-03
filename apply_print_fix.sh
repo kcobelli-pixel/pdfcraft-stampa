@@ -36,9 +36,13 @@ rm -rf "$work"
 mkdir -p "$work"
 # LF working trees, like the patches (Git for Windows checks out CRLF by default); `clone -c`
 # keeps the setting for the checkout and apply that follow.
+# PdfCraft may pin a revision no branch holds any more (v0.18.0 does): fetch it by its id, as
+# cargo does.
 git clone -c core.autocrlf=false -q https://github.com/storytold/craft-libs "$work/craft-libs"
+git -C "$work/craft-libs" fetch -q origin "$craft_libs_rev"
 git -C "$work/craft-libs" checkout -q "$craft_libs_rev"
 git clone -c core.autocrlf=false -q https://github.com/storytold/winprint.rs "$work/winprint"
+git -C "$work/winprint" fetch -q origin "$winprint_rev"
 git -C "$work/winprint" checkout -q "$winprint_rev"
 
 # Our fallback merged, or winprint starting its PrintTicket from the driver's default (the
