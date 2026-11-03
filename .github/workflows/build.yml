@@ -235,6 +235,9 @@ jobs:
           cd artifacts
           if [ -z "$(ls)" ]; then echo "::error::nothing was built"; exit 1; fi
           packages="$(ls | grep -v -e '^PATCH-UFFICIALE-' -e '^PATCHES-' || true)"
+          # A receipt says its package is fully published, so it goes up after the checksums.
+          receipts="$(ls | grep '^PATCHES-' || true)"
+          others="$(ls | grep -v '^PATCHES-' || true)"
           if [ -n "$packages" ]; then
             # Checksums of the new packages, plus the published ones they don't replace.
             sha256sum -- $packages > ../sums/new.txt
@@ -248,10 +251,10 @@ jobs:
           fi
           if [ "$EXISTS" = "true" ]; then
             # Packages first and the checksums last: a download in between fails its hash check.
-            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- *
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- $others
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$notes"
           else
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "PdfCraft $TAG con le patch" --notes "$notes" --latest=false -- *
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "PdfCraft $TAG con le patch" --notes "$notes" --latest=false -- $others
           fi
           if [ -f ../sums/SHA256SUMS.txt ]; then
             # Every package on the release must keep its line, or its patch would read "not ready".
@@ -260,6 +263,7 @@ jobs:
             done
             gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- ../sums/SHA256SUMS.txt
           fi
+          if [ -n "$receipts" ]; then gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- $receipts; fi
           if [ "$BUILD_RESULT" != "success" ]; then
             echo "::error::a platform failed to build; the next run retries it"; exit 1
           fi
