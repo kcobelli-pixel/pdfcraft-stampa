@@ -153,6 +153,23 @@ jobs:
           ref: ${{ steps.fonts.outputs.ref }}
           path: craft-fonts
           persist-credentials: false
+      # From 0.18.1 the translations live in storytold/craft-i18n: without them the build is English only.
+      - name: Read the craft-i18n pin
+        id: i18n
+        if: steps.fix.outputs.fixes != ''
+        shell: bash
+        run: |
+          [ -f pdfcraft/craft-i18n.rev ] || exit 0
+          ref="$(tr -d '[:space:]' < pdfcraft/craft-i18n.rev)"
+          if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::unexpected craft-i18n.rev '$ref'"; exit 1; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.i18n.outputs.ref != ''
+        with:
+          repository: storytold/craft-i18n
+          ref: ${{ steps.i18n.outputs.ref }}
+          path: craft-i18n
+          persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.fix.outputs.fixes != ''
         with:
@@ -171,6 +188,8 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: '1'
+          CRAFT_I18N_DIR: ${{ steps.i18n.outputs.ref && format('{0}/craft-i18n', github.workspace) || '' }}
+          CRAFT_I18N_REQUIRED: ${{ steps.i18n.outputs.ref && '1' || '' }}
         run: ./packaging/windows/package.ps1 -Arch x64
       - name: Package for macOS (ad-hoc signed)
         if: steps.fix.outputs.fixes != '' && runner.os == 'macOS'
@@ -178,6 +197,8 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: '1'
+          CRAFT_I18N_DIR: ${{ steps.i18n.outputs.ref && format('{0}/craft-i18n', github.workspace) || '' }}
+          CRAFT_I18N_REQUIRED: ${{ steps.i18n.outputs.ref && '1' || '' }}
         run: packaging/macos/package.sh --arch universal
       - name: Check the build has the patches
         if: steps.fix.outputs.fixes != ''
@@ -200,6 +221,10 @@ jobs:
             esac
             LC_ALL=C grep -a -q "$mark" "$BINARY" || { echo "::error::$fix patch missing from $BINARY"; exit 1; }
           done
+          # The embedded catalogs keep their header comments: the Italian one must be in there.
+          if [ -d craft-i18n ]; then
+            LC_ALL=C grep -a -q 'Italiano (it) interface catalog' "$BINARY" || { echo "::error::the Italian interface is missing from $BINARY"; exit 1; }
+          fi
           # The receipt: which patches this build has (plan and the install scripts read it).
           printf '%s\n' $FIXES > "pdfcraft/dist/release/PATCHES-$PLATFORM.txt"
           ls -l pdfcraft/dist/release
