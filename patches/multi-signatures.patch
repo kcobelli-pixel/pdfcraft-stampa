@@ -1,8 +1,8 @@
 diff --git a/apps/pdfcraft-web/src/main.rs b/apps/pdfcraft-web/src/main.rs
-index 73d14f4a..5127a036 100644
+index ffa5a060..96a8a1dd 100644
 --- a/apps/pdfcraft-web/src/main.rs
 +++ b/apps/pdfcraft-web/src/main.rs
-@@ -27,6 +27,9 @@ fn main() {
+@@ -20,6 +20,9 @@ fn main() {
                      if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                          app.restore(&json);
                      }
@@ -13,10 +13,10 @@ index 73d14f4a..5127a036 100644
                      if let Some(url) = query_param("file") {
                          let inbox = app.startup_inbox.clone();
 diff --git a/apps/pdfcraft/src/main.rs b/apps/pdfcraft/src/main.rs
-index f8e4e5b0..7ab5d283 100644
+index be2290d2..ae38c955 100644
 --- a/apps/pdfcraft/src/main.rs
 +++ b/apps/pdfcraft/src/main.rs
-@@ -413,6 +413,9 @@ fn app_creator<'a>(
+@@ -405,6 +405,9 @@ fn app_creator<'a>(
          if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
              app.restore(&json);
          }
@@ -27,10 +27,10 @@ index f8e4e5b0..7ab5d283 100644
          app.integrated_titlebar = integrated;
          app.window_controls = window_controls;
 diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
-index 8925a0dc..52a4c0a7 100644
+index 04dbd194..b78d9b80 100644
 --- a/crates/ui-egui/src/app.rs
 +++ b/crates/ui-egui/src/app.rs
-@@ -223,6 +223,8 @@ impl PdfCraftApp {
+@@ -286,6 +286,8 @@ impl PdfCraftApp {
              export_status: None,
              signature: None,
              initials: None,
@@ -39,7 +39,7 @@ index 8925a0dc..52a4c0a7 100644
              signature_draft: Default::default(),
              signature_preview: None,
              signature_photo: None,
-@@ -335,6 +337,7 @@ impl eframe::App for PdfCraftApp {
+@@ -447,6 +449,7 @@ impl eframe::App for PdfCraftApp {
              self.window_state.keep(storage, minimized);
          }
          storage.set_string("pdfcraft", self.persist());
@@ -48,10 +48,10 @@ index 8925a0dc..52a4c0a7 100644
  
      /// Each frame's work before drawing: opens, operating-system and control-channel requests,
 diff --git a/crates/ui-egui/src/app/prefs.rs b/crates/ui-egui/src/app/prefs.rs
-index f64ba6d8..aeb27727 100644
+index 1a8c2d26..6aafc35c 100644
 --- a/crates/ui-egui/src/app/prefs.rs
 +++ b/crates/ui-egui/src/app/prefs.rs
-@@ -150,6 +150,35 @@ impl PdfCraftApp {
+@@ -167,6 +167,35 @@ impl PdfCraftApp {
          v.to_string()
      }
  
@@ -88,10 +88,10 @@ index f64ba6d8..aeb27727 100644
      pub fn restore(&mut self, json: &str) {
          let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
 diff --git a/crates/ui-egui/src/commands.rs b/crates/ui-egui/src/commands.rs
-index acccbcc5..499700c6 100644
+index 7c0df877..e4ff3886 100644
 --- a/crates/ui-egui/src/commands.rs
 +++ b/crates/ui-egui/src/commands.rs
-@@ -661,8 +661,9 @@ impl PdfCraftApp {
+@@ -697,8 +697,9 @@ impl PdfCraftApp {
                      &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
                  );
              }
@@ -104,10 +104,10 @@ index acccbcc5..499700c6 100644
                  let initials = id == "sign.fill.initials.change";
                  let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
 diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
-index c21604a4..bbf24157 100644
+index 7ce76c42..0235391b 100644
 --- a/crates/ui-egui/src/dialogs.rs
 +++ b/crates/ui-egui/src/dialogs.rs
-@@ -1307,6 +1307,12 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
+@@ -1352,6 +1352,12 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
      }
      if req.apply {
          let d = std::mem::take(&mut app.signature_draft);
@@ -121,10 +121,10 @@ index c21604a4..bbf24157 100644
              app.initials = d.saved();
              crate::fill_sign::FillTool::Initials
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 65bc7e4b..8ce87298 100644
+index 380f84a6..9df90752 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -571,6 +571,9 @@ pub struct PdfCraftApp {
+@@ -662,6 +662,9 @@ pub struct PdfCraftApp {
      /// The saved Fill & Sign signature and initials (drawn or typed).
      pub signature: Option<fill_sign::SavedSig>,
      pub initials: Option<fill_sign::SavedSig>,
@@ -135,10 +135,10 @@ index 65bc7e4b..8ce87298 100644
      pub signature_draft: fill_sign::SigDraft,
      pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
 diff --git a/crates/ui-egui/src/tools/fill_sign.rs b/crates/ui-egui/src/tools/fill_sign.rs
-index 995b60fc..1e2c580f 100644
+index c7e270fd..ff4f69d6 100644
 --- a/crates/ui-egui/src/tools/fill_sign.rs
 +++ b/crates/ui-egui/src/tools/fill_sign.rs
-@@ -345,6 +345,8 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
+@@ -402,6 +402,8 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
  pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp, t: &Tokens) -> Option<&'static str> {
      ui.set_width(ui.available_width().clamp(240.0, 248.0));
      let mut command = None;
@@ -147,33 +147,26 @@ index 995b60fc..1e2c580f 100644
      for (i, (saved, what, use_id, change_id, remove_id)) in [
          (app.signature.as_ref(), "signature", "sign.fill.signature", "sign.fill.signature.change", "sign.fill.signature.remove"),
          (app.initials.as_ref(), "initials", "sign.fill.initials", "sign.fill.initials.change", "sign.fill.initials.remove"),
-@@ -352,37 +354,62 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
-     .into_iter()
-     .enumerate()
-     {
--        let label = |template: &str| crate::i18n::fmt(tl!(template), &[("what", tl!(what))]);
-         let Some(saved) = saved else {
--            if crate::widgets::ghost_button(ui, "plus", &label("Add {what}")).clicked() {
-+            let label = crate::i18n::fmt(tl!("Add {what}"), &[("what", tl!(what))]);
-+            if crate::widgets::ghost_button(ui, "plus", &label).clicked() {
-                 command = Some(use_id);
+@@ -416,35 +418,62 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
              }
              continue;
          };
--        ui.horizontal(|ui| {
+-        let on = app.quick_tool == crate::QuickTool::Fill(if i == 0 { FillTool::Signature } else { FillTool::Initials });
+-        let wash = ui.painter().add(egui::Shape::Noop);
+-        let row = ui.horizontal(|ui| {
 -            let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
 -            let use_label = label("Use {what}");
--            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
+-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, use_label.clone()));
 -            let painter = ui.painter_at(rect);
 -            painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
 -            painter.rect_stroke(
 -                rect,
 -                CornerRadius::same(4),
--                Stroke::new(1.0, if response.hovered() { t.accent } else { t.border }),
+-                Stroke::new(1.0, if on || response.hovered() { t.accent } else { t.border }),
 -                egui::StrokeKind::Inside,
 -            );
 -            paint_saved(ui, rect.shrink(8.0), saved, &mut app.saved_signature_previews[i], &format!("saved-{what}"));
--            if response.on_hover_text(label("Place saved {what}")).clicked() {
+-            if crate::theme::hand(response).on_hover_text(label("Place saved {what}")).clicked() {
 -                command = Some(use_id);
 -            }
 -            if crate::icons::button(ui, "pencil", 26.0, false, &label("Change {what}")).clicked() {
@@ -181,29 +174,30 @@ index 995b60fc..1e2c580f 100644
 -            }
 -            if crate::icons::button(ui, "x", 26.0, false, &label("Remove saved {what}")).clicked() {
 -                command = Some(remove_id);
--            }
--        });
--        ui.add_space(4.0);
++        let armed = app.quick_tool == crate::QuickTool::Fill(if i == 0 { FillTool::Signature } else { FillTool::Initials });
 +        app.more_signature_previews[i].resize_with(app.more_signatures[i].len(), || None);
 +        // The one in use, then the further ones, numbered from 2 so each card's name is its own.
 +        let others = app.more_signatures[i].iter().zip(app.more_signature_previews[i].iter_mut()).enumerate();
 +        for (k, (saved, cache)) in std::iter::once((None, (saved, &mut app.saved_signature_previews[i]))).chain(others.map(|(k, c)| (Some(k), c))) {
 +            let n = k.map_or(String::new(), |k| format!(" {}", k + 2));
-+            let label = |template: &str| crate::i18n::fmt(tl!(template), &[("what", tl!(what))]) + &n;
-+            ui.horizontal(|ui| {
++            let label = |template: &str| label(template) + &n;
++            // The armed tool places the one in use, so only its card is marked.
++            let on = armed && k.is_none();
++            let wash = ui.painter().add(egui::Shape::Noop);
++            let row = ui.horizontal(|ui| {
 +                let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
 +                let use_label = label("Use {what}");
-+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
++                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, use_label.clone()));
 +                let painter = ui.painter_at(rect);
 +                painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
 +                painter.rect_stroke(
 +                    rect,
 +                    CornerRadius::same(4),
-+                    Stroke::new(1.0, if response.hovered() { t.accent } else { t.border }),
++                    Stroke::new(1.0, if on || response.hovered() { t.accent } else { t.border }),
 +                    egui::StrokeKind::Inside,
 +                );
 +                paint_saved(ui, rect.shrink(8.0), saved, cache, &format!("saved-{what}{n}"));
-+                if response.on_hover_text(label("Place saved {what}")).clicked() {
++                if crate::theme::hand(response).on_hover_text(label("Place saved {what}")).clicked() {
 +                    command = Some(use_id);
 +                    more = k.map(|k| (i, k, false));
 +                }
@@ -218,11 +212,17 @@ index 995b60fc..1e2c580f 100644
 +                    }
 +                }
 +            });
++            if on {
++                ui.painter().set(wash, egui::Shape::rect_filled(row.response.rect.expand(3.0), CornerRadius::same(6), t.accent_soft));
+             }
+-        });
+-        if on {
+-            ui.painter().set(wash, egui::Shape::rect_filled(row.response.rect.expand(3.0), CornerRadius::same(6), t.accent_soft));
 +            ui.add_space(4.0);
 +        }
 +        // Another one: the signature pad's Apply keeps the one in use among the further ones and
 +        // arms the tool; Cancel leaves everything, the current tool included, as it was.
-+        if crate::widgets::ghost_button(ui, "plus", &crate::i18n::fmt(tl!("Add {what}"), &[("what", tl!(what))])).clicked() {
++        if crate::widgets::ghost_button(ui, "plus", &label("Add {what}")).clicked() {
 +            app.signature_draft = SigDraft::new(i == 1, &app.comment_prefs.author);
 +            app.dialog = Some(crate::Dialog::Signature);
 +        }
@@ -232,7 +232,8 @@ index 995b60fc..1e2c580f 100644
 +            app.more_signatures[i].remove(k);
 +        } else if let Some(current) = if i == 0 { app.signature.as_mut() } else { app.initials.as_mut() } {
 +            std::mem::swap(current, &mut app.more_signatures[i][k]);
-+        }
+         }
+-        ui.add_space(4.0);
      }
      command
  }
