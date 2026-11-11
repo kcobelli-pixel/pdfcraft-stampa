@@ -27,7 +27,15 @@ locked_rev() {
 }
 
 craft_libs_rev="$(locked_rev craft-print https://github.com/storytold/craft-libs)"
-winprint_rev="$(locked_rev winprint https://github.com/storytold/winprint.rs)"
+# PdfCraft 0.21.0 also pins an older winprint for its own crates, and the [patch] below replaces
+# every winprint of that repository: it must be the one craft-print is built with. Cargo.lock
+# names it in craft-print's dependencies only when there are several.
+craft_print_winprint="$(awk '
+  /^\[\[package\]\]/ { name = "" }
+  /^name = / { name = $3 }
+  name == "\"craft-print\"" && /^ *"winprint [^ ]+ \(git\+https:\/\/github\.com\/storytold\/winprint\.rs\?rev=/ {
+    sub(/.*rev=/, ""); sub(/\).*/, ""); print; exit }' "$lock")"
+winprint_rev="${craft_print_winprint:-$(locked_rev winprint https://github.com/storytold/winprint.rs)}"
 for rev in "$craft_libs_rev" "$winprint_rev"; do
   [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || { echo "craft-print or winprint is not pinned to a git revision in $lock" >&2; exit 1; }
 done
